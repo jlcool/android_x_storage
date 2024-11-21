@@ -1,9 +1,11 @@
 package dev.yacine.android_x_storage
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Environment
+import android.os.storage.StorageManager
 
 import androidx.core.content.ContextCompat
 
@@ -81,46 +83,63 @@ class AndroidXStoragePlugin : FlutterPlugin, MethodCallHandler {
       }
     }
   }
+  @SuppressLint("PrivateApi")
+  fun getStoragePath(context: Context, targetType: String): List<String> {
+    val storageManager = context.getSystemService(Context.STORAGE_SERVICE) as StorageManager
+    val paths = mutableListOf<String>()
+    try {
+      // 获取 StorageManager 的 getVolumes 方法
+      val getVolumesMethod = StorageManager::class.java.getMethod("getVolumes")
+      val volumeInfoList = getVolumesMethod.invoke(storageManager) as List<*>
 
-  private fun getSDCardPath(): String? {
-    val externalStorageVolumes = ContextCompat.getExternalFilesDirs(applicationContext, null)
-    for (file in externalStorageVolumes) {
-      if (isSDCard(file)) {
-        val path = file.path
-        val sdCardPath = path.substringBefore("/Android/data")
-        return sdCardPath
+      val volumeInfoClass = Class.forName("android.os.storage.VolumeInfo")
+      val getTypeMethod = volumeInfoClass.getMethod("getType")
+      val getDiskMethod = volumeInfoClass.getMethod("getDisk")
+      val getPathMethod = volumeInfoClass.getMethod("getPath")
+
+      // DiskInfo 相关
+      val diskInfoClass = Class.forName("android.os.storage.DiskInfo")
+      val isSdMethod = diskInfoClass.getMethod("isSd")
+      val isUsbMethod = diskInfoClass.getMethod("isUsb")
+
+      for (volume in volumeInfoList) {
+        if (volume != null) {
+          val type = getTypeMethod.invoke(volume) as Int
+          // 只处理私有或可移除存储
+          if (type == 0 || type == 1) {
+            val disk = getDiskMethod.invoke(volume)
+            if (disk != null) {
+              val isSd = isSdMethod.invoke(disk) as Boolean
+              val isUsb = isUsbMethod.invoke(disk) as Boolean
+              val pathFile = getPathMethod.invoke(volume) as? File
+              val path = pathFile?.absolutePath // 获取路径字符串
+
+              if (targetType.equals("sd", true) && isSd && path!=null) {
+                paths.add(path)
+              }
+              if (targetType.equals("usb", true) && isUsb && path!=null) {
+                paths.add(path)
+              }
+            }
+          }
+        }
       }
+      return paths;
+    } catch (e: Exception) {
+      e.printStackTrace()
+    }
+    return paths // 未找到匹配的路径时返回 null
+  }
+  private fun getSDCardPath(): String? {
+    val paths= getStoragePath(applicationContext,"sd")
+    if(paths.isNotEmpty()){
+      return paths[0]
     }
     return null
   }
 
-  private fun isSDCard(file: File): Boolean {
-    val state = Environment.getExternalStorageState(file)
-    if (Environment.MEDIA_MOUNTED == state) {
-      val removable = Environment.isExternalStorageRemovable(file)
-      val emulated = Environment.isExternalStorageEmulated(file)
-      return removable && !emulated
-    }
-    return false
-  }
-
   private fun getUSBPaths(): List<String> {
-    val usbManager = applicationContext.getSystemService(Context.USB_SERVICE) as UsbManager
-    val usbDevices: HashMap<String, UsbDevice> = usbManager.deviceList
-    val usbPaths = mutableListOf<String>()
-
-    for (device in usbDevices.values) {
-      val usbPath = "/storage/" + device.deviceName
-      if (isDirectoryExists(usbPath)) {
-        usbPaths.add(usbPath)
-      }
-    }
-    return usbPaths
-  }
-
-  private fun isDirectoryExists(path: String): Boolean {
-    val directory = File(path)
-    return directory.exists() && directory.isDirectory
+    return getStoragePath(applicationContext,"usb")
   }
 
   override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
